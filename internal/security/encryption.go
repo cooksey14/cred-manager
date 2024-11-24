@@ -16,23 +16,33 @@ import (
 
 // Encrypt encrypts plaintext using AES-GCM with the provided key.
 func Encrypt(plaintext string, key []byte) (string, string, error) {
+	// Ensure the key is 32 bytes for AES-256
+	if len(key) != 32 {
+		return "", "", fmt.Errorf("encryption key must be 32 bytes long")
+	}
+
+	// Create a new AES cipher using the key
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create cipher: %v", err)
 	}
 
-	nonce := make([]byte, 12) // AES-GCM nonce size
+	// Generate a random nonce for AES-GCM
+	nonce := make([]byte, 12) // AES-GCM recommends a 12-byte nonce
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", "", fmt.Errorf("failed to generate nonce: %v", err)
 	}
 
+	// Create AES-GCM
 	aesGCM, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create GCM: %v", err)
 	}
 
+	// Encrypt the plaintext
 	ciphertext := aesGCM.Seal(nil, nonce, []byte(plaintext), nil)
 
+	// Return the ciphertext and nonce as base64-encoded strings
 	return base64.StdEncoding.EncodeToString(ciphertext), base64.StdEncoding.EncodeToString(nonce), nil
 }
 

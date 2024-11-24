@@ -3,6 +3,7 @@ package credential
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -25,14 +26,19 @@ func (s *CredentialService) CreateCredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Encrypt the password
 	encryptedPassword, nonce, err := sec.Encrypt(cred.Password, s.Key)
 	if err != nil {
 		http.Error(w, "Failed to encrypt password", http.StatusInternalServerError)
 		return
 	}
 
+	// Combine ciphertext and nonce
+	encryptedValue := fmt.Sprintf("%s|%s", encryptedPassword, nonce)
+
+	// Insert the credential into the database
 	query := "INSERT INTO credentials (service, username, password, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)"
-	result, err := s.DB.Exec(query, cred.Service, cred.Username, encryptedPassword+"|"+nonce)
+	result, err := s.DB.Exec(query, cred.Service, cred.Username, encryptedValue)
 	if err != nil {
 		http.Error(w, "Failed to insert credential", http.StatusInternalServerError)
 		return
