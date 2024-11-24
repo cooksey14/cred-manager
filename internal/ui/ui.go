@@ -1,8 +1,11 @@
 package ui
 
 import (
-	"database/sql"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -12,42 +15,99 @@ import (
 	"github.com/cooksey14/cred-manager/internal/models"
 )
 
-// RenderUI creates and displays the main UI window
-func RenderUI(db *sql.DB) {
-	// Create a new Fyne application
-	a := app.New()
+// API Base URL
+const apiBaseURL = "http://localhost:8080"
 
-	// Create a new window
+// Fetch credentials via API
+func fetchCredentials() ([]models.Credential, error) {
+	resp, err := http.Get(fmt.Sprintf("%s/credentials", apiBaseURL))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch credentials: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch credentials: status code %d", resp.StatusCode)
+	}
+
+	var creds []models.Credential
+	if err := json.NewDecoder(resp.Body).Decode(&creds); err != nil {
+		return nil, fmt.Errorf("failed to decode credentials: %v", err)
+	}
+
+	return creds, nil
+}
+
+// Delete a credential via API
+func deleteCredential(id int) error {
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/credentials/%d", apiBaseURL, id), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete credential: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete credential: %s", body)
+	}
+
+	return nil
+}
+
+// Add a new credential via API
+func addCredential(cred models.Credential) error {
+	data, err := json.Marshal(cred)
+	if err != nil {
+		return fmt.Errorf("failed to marshal credential: %v", err)
+	}
+
+	resp, err := http.Post(fmt.Sprintf("%s/credentials", apiBaseURL), "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("failed to add credential: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to add credential: %s", body)
+	}
+
+	return nil
+}
+
+// RenderUI creates and displays the main UI window
+func RenderUI() {
+	a := app.New()
 	w := a.NewWindow("Password Manager")
 
-	// Fetch credentials from the database
-	fetchCredentials := func() ([]models.Credential, error) {
-		rows, err := db.Query("SELECT id, service, username, password, created_at FROM credentials")
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
+	// Track the selected index
+	var selectedIndex int = -1
 
-		var creds []models.Credential
-		for rows.Next() {
-			var cred models.Credential
-			err := rows.Scan(&cred.ID, &cred.Service, &cred.Username, &cred.Password, &cred.CreatedAt)
-			if err != nil {
-				return nil, err
-			}
-			creds = append(creds, cred)
-		}
-		return creds, nil
+	// Fetch and display credentials
+	credentialsList := widget.NewList(
+		func() int {
+			creds, _ := fetchCredentials()
+			return len(creds)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("")
+		},
+		func(id widget.ListItemID, item fyne.CanvasObject) {
+			creds, _ := fetchCredentials()
+			item.(*widget.Label).SetText(fmt.Sprintf("%s (%s)", creds[id].Service, creds[id].Username))
+		},
+	)
+
+	credentialsList.OnSelected = func(id widget.ListItemID) {
+		selectedIndex = id
 	}
 
-	// Delete a credential from the database
-	deleteCredential := func(id int) error {
-		query := "DELETE FROM credentials WHERE id = ?"
-		_, err := db.Exec(query, id)
-		return err
-	}
-
-	// Show a dialog to add a new credential
+	// Add a new credential
 	showAddCredentialDialog := func(w fyne.Window, credentialsList *widget.List) {
 		serviceEntry := widget.NewEntry()
 		serviceEntry.SetPlaceHolder("Service Name")
@@ -77,10 +137,13 @@ func RenderUI(db *sql.DB) {
 						return
 					}
 
-					// Insert into the database
-					query := "INSERT INTO credentials (service, username, password) VALUES (?, ?, ?)"
-					_, err := db.Exec(query, service, username, password)
-					if err != nil {
+					cred := models.Credential{
+						Service:  service,
+						Username: username,
+						Password: password,
+					}
+
+					if err := addCredential(cred); err != nil {
 						dialog.ShowError(fmt.Errorf("failed to add credential: %v", err), w)
 						return
 					}
@@ -92,40 +155,7 @@ func RenderUI(db *sql.DB) {
 		)
 	}
 
-	// Track the selected index
-	var selectedIndex int = -1
-
-	// Create the list widget
-	credentialsList := widget.NewList(
-		func() int {
-			creds, _ := fetchCredentials()
-			return len(creds)
-		},
-		func() fyne.CanvasObject {
-			return widget.NewLabel("") // Template for each row
-		},
-		func(id widget.ListItemID, item fyne.CanvasObject) {
-			creds, _ := fetchCredentials()
-			item.(*widget.Label).SetText(fmt.Sprintf("%s (%s)", creds[id].Service, creds[id].Username))
-		},
-	)
-
-	// Set the OnSelected callback
-	credentialsList.OnSelected = func(id widget.ListItemID) {
-		selectedIndex = id
-	}
-
-	// Add button to refresh the list
-	refreshButton := widget.NewButton("Refresh", func() {
-		credentialsList.Refresh()
-	})
-
-	// Add button to add a new credential
-	addButton := widget.NewButton("Add Credential", func() {
-		showAddCredentialDialog(w, credentialsList)
-	})
-
-	// Add button to delete a selected credential
+	// Delete a selected credential
 	deleteButton := widget.NewButton("Delete Selected", func() {
 		if selectedIndex < 0 {
 			dialog.ShowError(fmt.Errorf("no credential selected"), w)
@@ -143,11 +173,22 @@ func RenderUI(db *sql.DB) {
 			dialog.ShowError(fmt.Errorf("failed to delete credential: %v", err), w)
 			return
 		}
+
 		credentialsList.Unselect(selectedIndex)
 		credentialsList.Refresh()
 	})
 
-	// Arrange buttons and list in the UI
+	// Refresh credentials list
+	refreshButton := widget.NewButton("Refresh", func() {
+		credentialsList.Refresh()
+	})
+
+	// Add a credential
+	addButton := widget.NewButton("Add Credential", func() {
+		showAddCredentialDialog(w, credentialsList)
+	})
+
+	// Layout the UI
 	w.SetContent(container.NewBorder(
 		container.NewVBox(refreshButton, addButton, deleteButton),
 		nil, nil, nil,
@@ -157,14 +198,3 @@ func RenderUI(db *sql.DB) {
 	w.Resize(fyne.NewSize(400, 600))
 	w.ShowAndRun()
 }
-
-// func copyToClipboard(app fyne.App, content string) {
-// 	var clipboard string
-// 	clipboard = app.Clipboard()
-// 	clipboard.SetContent(content)
-
-// 	go func() {
-// 		time.Sleep(30 * time.Second)
-// 		clipboard.SetContent("")
-// 	}()
-// }

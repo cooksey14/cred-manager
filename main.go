@@ -55,7 +55,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Create a wait group to manage the API server goroutine
 	var wg sync.WaitGroup
 
 	// Start the API server in a goroutine
@@ -71,7 +70,6 @@ func main() {
 
 	// Run the UI in the main goroutine
 	go func() {
-		// When the UI exits, signal the application to stop
 		<-ctx.Done()
 		log.Println("UI closed. Stopping API server...")
 		if err := server.Shutdown(context.Background()); err != nil {
@@ -81,7 +79,7 @@ func main() {
 
 	// Run the UI in the main thread
 	log.Println("Starting UI")
-	ui.RenderUI(db) // This blocks until the UI exits
+	ui.RenderUI()
 
 	// Wait for the API server goroutine to finish
 	wg.Wait()
